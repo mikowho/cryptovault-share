@@ -7,6 +7,8 @@ const AUTO_PREVIEW_LIMIT = 100 * 1024 * 1024; // 瀑布流自动加载上限 100
 // 并发解密线程数：写死 2（访问者是第三方，固定低并发防风控/内存峰值）
 const CONCURRENCY = 2;
 const decryptSemaphore = new Semaphore(CONCURRENCY);
+const PAGE_SIZE = 20; // 媒体每页张数（固定高度网格 + 翻页，杜绝滚动布局抖动）
+const MAX_MEDIA_CACHE = 40; // 最多缓存多少个解密后的媒体 Blob（LRU 淘汰防内存爆）
 
 function formatSize(n) {
   if (!n) return '';
@@ -51,6 +53,7 @@ export default function SharePage() {
   const [error, setError] = useState('');
   const [preview, setPreview] = useState(null); // { name, url, mime }
   const [viewMode, setViewMode] = useState('waterfall'); // waterfall | list
+  const [page, setPage] = useState(1); // 媒体网格分页
   const isMobile = useIsMobile();
 
   // 瀑布流懒加载：Map(index → { url, mime } | { tooBig } | { error })
@@ -60,6 +63,14 @@ export default function SharePage() {
 
   const mediaItems = useMemo(() => items.filter((it) => isPreviewable(it.plainName)), [items]);
   const otherItems = useMemo(() => items.filter((it) => !isPreviewable(it.plainName)), [items]);
+
+  // 媒体分页：每页 PAGE_SIZE 张
+  const totalPages = Math.max(1, Math.ceil(mediaItems.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pagedItems = useMemo(
+    () => mediaItems.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [mediaItems, safePage],
+  );
 
   /** 解析列表：.key 条目（回传 key）自动拉取解密并展开为资料包；其余原样保留 */
   async function resolveItems(list) {
@@ -130,13 +141,13 @@ export default function SharePage() {
     return decryptFileWithDek(cipher, item.dek);
   }
 
-  // 瀑布流：视口附近懒加载解密，离开释放
+  // 媒体卡片：整页加载（信号量限并发），已加载缓存保留（回翻秒显不闪烁），LRU 淘汰防内存爆
   async function loadMediaCard(item, index) {
     if (loadedRef.current.has(index)) return;
-    loadedRef.current.set(index, { loading: true });
+    loadedRef.current.set(index, { loading: true, lastUsed: Date.now() });
     setLoaded(new Map(loadedRef.current));
     if (item.size > AUTO_PREVIEW_LIMIT) {
-      loadedRef.current.set(index, { tooBig: true });
+      loadedRef.current.set(index, { tooBig: true, lastUsed: Date.now() });
       setLoaded(new Map(loadedRef.current));
       return;
     }
@@ -150,44 +161,40 @@ export default function SharePage() {
         decryptSemaphore.release();
       }
       const url = URL.createObjectURL(new Blob([plain], { type: mimeFromName(item.plainName) }));
-      if (!loadedRef.current.has(index)) {
-        URL.revokeObjectURL(url);
-        return;
-      }
-      loadedRef.current.set(index, { url, mime: mimeFromName(item.plainName) });
+      loadedRef.current.set(index, { url, mime: mimeFromName(item.plainName), lastUsed: Date.now() });
       setLoaded(new Map(loadedRef.current));
+      evictMediaCache();
     } catch (e) {
-      loadedRef.current.set(index, { error: e.message || '加载失败' });
+      loadedRef.current.set(index, { error: e.message || '加载失败', lastUsed: Date.now() });
       setLoaded(new Map(loadedRef.current));
     }
   }
 
-  function releaseMediaCard(index) {
-    const entry = loadedRef.current.get(index);
-    if (entry?.url) URL.revokeObjectURL(entry.url);
-    loadedRef.current.delete(index);
+  /** LRU 淘汰：超过 MAX_MEDIA_CACHE 时释放最久未用的 Blob */
+  function evictMediaCache() {
+    const entries = [...loadedRef.current.entries()];
+    if (entries.length <= MAX_MEDIA_CACHE) return;
+    entries
+      .filter(([, v]) => v.url)
+      .sort((a, b) => a[1].lastUsed - b[1].lastUsed)
+      .slice(0, entries.length - MAX_MEDIA_CACHE)
+      .forEach(([idx, v]) => {
+        URL.revokeObjectURL(v.url);
+        loadedRef.current.delete(idx);
+      });
     setLoaded(new Map(loadedRef.current));
   }
 
+  // 分页整页加载：当前页媒体全部进队列（信号量 2 并发）；固定高度网格无滚动抖动
   useEffect(() => {
     if (!mediaItems.length) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          const idx = Number(e.target.dataset.index);
-          const item = mediaItems[idx];
-          if (!item) continue;
-          if (e.isIntersecting) loadMediaCard(item, idx);
-          else releaseMediaCard(idx);
-        }
-      },
-      { rootMargin: '400px 0px' },
-    );
-    const els = listRef.current?.querySelectorAll('[data-media-card]');
-    els?.forEach((el) => io.observe(el));
-    return () => io.disconnect();
+    const start = (safePage - 1) * PAGE_SIZE;
+    const end = Math.min(start + PAGE_SIZE, mediaItems.length);
+    for (let i = start; i < end; i += 1) {
+      loadMediaCard(mediaItems[i], i);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaItems]);
+  }, [mediaItems, safePage]);
 
   async function handlePreview(item) {
     setBusy(true);
@@ -291,55 +298,59 @@ export default function SharePage() {
       {error && <div style={{ background: '#fdecec', color: '#c33', padding: 10, borderRadius: 8, marginTop: 12 }}>{error}</div>}
 
       {items.length > 0 && viewMode === 'waterfall' && (
-        <div ref={listRef} style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16 }}>
           <div style={{ color: '#999', fontSize: 13, marginBottom: 8 }}>
-            瀑布流：滚动自动加载视口附近的图片/视频（{mediaItems.length} 个媒体文件）
+            网格预览：每页 {PAGE_SIZE} 张 · 共 {mediaItems.length} 张（第 {safePage}/{totalPages} 页，已加载缓存可回翻秒显）
           </div>
+          {mediaItems.length === 0 && <div style={{ color: '#999', fontSize: 13 }}>（无媒体文件）</div>}
           {mediaItems.length > 0 && (
-            <div style={{ columnCount: isMobile ? 2 : 3, columnGap: 12 }}>
-              {mediaItems.map((it, i) => {
-                const m = loaded.get(i);
-                return (
-                  <div
-                    key={i}
-                    className="masonry-card"
-                    style={{ breakInside: 'avoid', marginBottom: 12, cursor: 'pointer' }}
-                    data-media-card
-                    data-index={i}
-                    onClick={() => handlePreview(it)}
-                    title={it.plainName}
-                  >
-                    <div style={{ background: '#f2f3f5', borderRadius: 8, overflow: 'hidden' }}>
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${isMobile ? 2 : 3}, 1fr)`, gap: 12 }}>
+                {pagedItems.map((it, i) => {
+                  const idx = (safePage - 1) * PAGE_SIZE + i;
+                  const m = loaded.get(idx);
+                  return (
+                    <div
+                      key={idx}
+                      className="masonry-card"
+                      style={{ height: 200, position: 'relative', overflow: 'hidden', borderRadius: 8, cursor: 'pointer', background: '#f2f3f5' }}
+                      onClick={() => handlePreview(it)}
+                      title={it.plainName}
+                    >
                       {m?.url ? (
                         m.mime.startsWith('video/') ? (
                           <video
                             src={m.url}
-                            controls
                             muted
                             playsInline
                             preload="metadata"
                             onLoadedMetadata={(e) => { try { e.currentTarget.currentTime = 0.01; } catch {} }}
-                            style={{ width: '100%', display: 'block' }}
-                            onClick={(e) => e.stopPropagation()}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                           />
                         ) : (
-                          <img src={m.url} alt={it.plainName} loading="lazy" style={{ width: '100%', display: 'block' }} />
+                          <img src={m.url} alt={it.plainName} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                         )
                       ) : m?.tooBig ? (
-                        <div style={{ padding: 16, color: '#999', fontSize: 12 }}>过大（&gt;{formatSize(AUTO_PREVIEW_LIMIT)}）</div>
+                        <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontSize: 12 }}>过大（&gt;{formatSize(AUTO_PREVIEW_LIMIT)}）</div>
                       ) : m?.error ? (
-                        <div style={{ padding: 16, color: '#c33', fontSize: 12 }}>加载失败</div>
+                        <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c33', fontSize: 12 }}>加载失败</div>
                       ) : (
-                        <div className="placeholder-pulse" style={{ padding: 32, textAlign: 'center', color: '#bbb', fontSize: 12 }}>加载中…</div>
+                        <div className="placeholder-pulse" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#bbb', fontSize: 12 }}>加载中…</div>
                       )}
+                      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '4px 6px', fontSize: 11, color: '#fff', background: 'rgba(0,0,0,0.45)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.plainName}</div>
                     </div>
-                    <div style={{ fontSize: 12, color: '#666', padding: '4px 2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.plainName}</div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+              {totalPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 14, margin: '16px 0' }}>
+                  <button className="btn-ghost" style={{ padding: '6px 16px' }} disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>‹ 上一页</button>
+                  <span style={{ fontSize: 13, color: '#666' }}>第 {safePage} / {totalPages} 页</span>
+                  <button className="btn-ghost" style={{ padding: '6px 16px' }} disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>下一页 ›</button>
+                </div>
+              )}
+            </>
           )}
-          {mediaItems.length === 0 && <div style={{ color: '#999', fontSize: 13 }}>（无媒体文件）</div>}
         </div>
       )}
 
