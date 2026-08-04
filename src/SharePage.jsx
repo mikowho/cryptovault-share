@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseShareText } from './lib/share.js';
 import { decryptFileWithDek } from './lib/crypto.js';
+import { mapLimit, Semaphore } from './lib/concurrency.js';
 
 const AUTO_PREVIEW_LIMIT = 100 * 1024 * 1024; // 瀑布流自动加载上限 100MB
+// 并发解密线程数（怕风控/内存，默认 2；可在 URL 加 ?c=1 调低、?c=4 调高）
+const CONCURRENCY = Math.max(1, Number(new URLSearchParams(window.location.search).get('c')) || 2);
+const decryptSemaphore = new Semaphore(CONCURRENCY);
 
 function formatSize(n) {
   if (!n) return '';
@@ -137,7 +141,14 @@ export default function SharePage() {
       return;
     }
     try {
-      const plain = await fetchPlain(item);
+      // 解密受信号量限制（最多 CONCURRENCY 个并发），防止同时拉取大量文件
+      await decryptSemaphore.acquire();
+      let plain;
+      try {
+        plain = await fetchPlain(item);
+      } finally {
+        decryptSemaphore.release();
+      }
       const url = URL.createObjectURL(new Blob([plain], { type: mimeFromName(item.plainName) }));
       if (!loadedRef.current.has(index)) {
         URL.revokeObjectURL(url);
@@ -214,7 +225,8 @@ export default function SharePage() {
     setBusy(true);
     setError('');
     try {
-      for (const it of items) {
+      // 限流并发下载（防风控，默认 2 线程）
+      await mapLimit(items, CONCURRENCY, async (it) => {
         const plain = await fetchPlain(it);
         const url = URL.createObjectURL(new Blob([plain], { type: mimeFromName(it.plainName) }));
         const a = document.createElement('a');
@@ -222,7 +234,7 @@ export default function SharePage() {
         a.download = it.plainName;
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
-      }
+      });
     } catch (e) {
       setError(e.message || '批量下载中断');
     } finally {
