@@ -46,6 +46,7 @@ export default function SharePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [preview, setPreview] = useState(null); // { name, url, mime }
+  const [viewMode, setViewMode] = useState('waterfall'); // waterfall | list
   const isMobile = useIsMobile();
 
   // 瀑布流懒加载：Map(index → { url, mime } | { tooBig } | { error })
@@ -258,52 +259,101 @@ export default function SharePage() {
             全部下载（{items.length}）
           </button>
         )}
+        <span style={{ flex: 1 }} />
+        <button
+          className={viewMode === 'waterfall' ? 'btn-primary' : 'btn-ghost'}
+          style={{ padding: '4px 10px' }}
+          onClick={() => setViewMode('waterfall')}
+        >
+          瀑布流
+        </button>
+        <button
+          className={viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}
+          style={{ padding: '4px 10px' }}
+          onClick={() => setViewMode('list')}
+        >
+          列表
+        </button>
       </div>
 
       {error && <div style={{ background: '#fdecec', color: '#c33', padding: 10, borderRadius: 8, marginTop: 12 }}>{error}</div>}
 
-      {mediaItems.length > 0 && (
+      {items.length > 0 && viewMode === 'waterfall' && (
         <div ref={listRef} style={{ marginTop: 16 }}>
           <div style={{ color: '#999', fontSize: 13, marginBottom: 8 }}>
             瀑布流：滚动自动加载视口附近的图片/视频（{mediaItems.length} 个媒体文件）
           </div>
-          <div style={{ columnCount: isMobile ? 2 : 3, columnGap: 12 }}>
-            {mediaItems.map((it, i) => {
-              const m = loaded.get(i);
-              return (
-                <div
-                  key={i}
-                  className="masonry-card"
-                  style={{ breakInside: 'avoid', marginBottom: 12, cursor: 'pointer' }}
-                  data-media-card
-                  data-index={i}
-                  onClick={() => handlePreview(it)}
-                  title={it.plainName}
-                >
-                  <div style={{ background: '#f2f3f5', borderRadius: 8, overflow: 'hidden' }}>
-                    {m?.url ? (
-                      m.mime.startsWith('video/') ? (
-                        <video src={m.url} muted playsInline preload="metadata" style={{ width: '100%', display: 'block' }} onClick={(e) => e.stopPropagation()} />
+          {mediaItems.length > 0 && (
+            <div style={{ columnCount: isMobile ? 2 : 3, columnGap: 12 }}>
+              {mediaItems.map((it, i) => {
+                const m = loaded.get(i);
+                return (
+                  <div
+                    key={i}
+                    className="masonry-card"
+                    style={{ breakInside: 'avoid', marginBottom: 12, cursor: 'pointer' }}
+                    data-media-card
+                    data-index={i}
+                    onClick={() => handlePreview(it)}
+                    title={it.plainName}
+                  >
+                    <div style={{ background: '#f2f3f5', borderRadius: 8, overflow: 'hidden' }}>
+                      {m?.url ? (
+                        m.mime.startsWith('video/') ? (
+                          <video
+                            src={m.url}
+                            controls
+                            muted
+                            playsInline
+                            preload="metadata"
+                            onLoadedMetadata={(e) => { try { e.currentTarget.currentTime = 0.01; } catch {} }}
+                            style={{ width: '100%', display: 'block' }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <img src={m.url} alt={it.plainName} loading="lazy" style={{ width: '100%', display: 'block' }} />
+                        )
+                      ) : m?.tooBig ? (
+                        <div style={{ padding: 16, color: '#999', fontSize: 12 }}>过大（&gt;{formatSize(AUTO_PREVIEW_LIMIT)}）</div>
+                      ) : m?.error ? (
+                        <div style={{ padding: 16, color: '#c33', fontSize: 12 }}>加载失败</div>
                       ) : (
-                        <img src={m.url} alt={it.plainName} loading="lazy" style={{ width: '100%', display: 'block' }} />
-                      )
-                    ) : m?.tooBig ? (
-                      <div style={{ padding: 16, color: '#999', fontSize: 12 }}>过大（&gt;{formatSize(AUTO_PREVIEW_LIMIT)}）</div>
-                    ) : m?.error ? (
-                      <div style={{ padding: 16, color: '#c33', fontSize: 12 }}>加载失败</div>
-                    ) : (
-                      <div className="placeholder-pulse" style={{ padding: 32, textAlign: 'center', color: '#bbb', fontSize: 12 }}>加载中…</div>
-                    )}
+                        <div className="placeholder-pulse" style={{ padding: 32, textAlign: 'center', color: '#bbb', fontSize: 12 }}>加载中…</div>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#666', padding: '4px 2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.plainName}</div>
                   </div>
-                  <div style={{ fontSize: 12, color: '#666', padding: '4px 2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.plainName}</div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
+          {mediaItems.length === 0 && <div style={{ color: '#999', fontSize: 13 }}>（无媒体文件）</div>}
         </div>
       )}
 
-      {otherItems.length > 0 && (
+      {viewMode === 'list' && items.length > 0 && (
+        <div style={{ marginTop: 16, border: '1px solid #eee', borderRadius: 12, overflow: 'hidden' }}>
+          {items.map((it, i) => (
+            <div key={`l${i}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: '1px solid #f3f3f3', fontSize: 14 }}>
+              <span
+                style={{ flex: 1, wordBreak: 'break-all', cursor: isPreviewable(it.plainName) ? 'pointer' : 'default' }}
+                onClick={() => isPreviewable(it.plainName) && handlePreview(it)}
+              >
+                {isPreviewable(it.plainName)
+                  ? (mimeFromName(it.plainName).startsWith('video/') ? '🎬' : '🖼️')
+                  : '📄'} {it.plainName}
+              </span>
+              <span style={{ color: '#999', fontSize: 13 }}>{formatSize(it.size)}</span>
+              {isPreviewable(it.plainName) && (
+                <button className="btn-link" onClick={() => handlePreview(it)} disabled={busy}>预览</button>
+              )}
+              <button className="btn-link" onClick={() => handleDownload(it)} disabled={busy}>下载</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {items.length > 0 && viewMode === 'waterfall' && otherItems.length > 0 && (
         <div style={{ marginTop: 16, border: '1px solid #eee', borderRadius: 12, overflow: 'hidden' }}>
           {otherItems.map((it, i) => (
             <div key={`o${i}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: '1px solid #f3f3f3', fontSize: 14 }}>
@@ -327,7 +377,14 @@ export default function SharePage() {
               <button className="btn-link" onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null); }}>关闭</button>
             </div>
             {preview.mime.startsWith('video/') ? (
-              <video src={preview.url} controls autoPlay style={{ maxWidth: '85vw', maxHeight: '75vh', objectFit: 'contain' }} />
+              <video
+                src={preview.url}
+                controls
+                autoPlay
+                playsInline
+                onLoadedMetadata={(e) => { try { e.currentTarget.currentTime = 0.01; } catch {} }}
+                style={{ maxWidth: '85vw', maxHeight: '75vh', objectFit: 'contain' }}
+              />
             ) : (
               <img src={preview.url} alt={preview.name} style={{ maxWidth: '85vw', maxHeight: '75vh', objectFit: 'contain' }} />
             )}
