@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseShareText } from './lib/share.js';
 import { decryptFileWithDek } from './lib/crypto.js';
 import { mapLimit, Semaphore } from './lib/concurrency.js';
+import { pickupDecrypt } from './lib/pickup.js';
+
+// 取件箱 Worker 地址（CF Pages 构建环境变量可覆盖）
+const PICKUP_BASE = import.meta.env?.VITE_PICKUPBOX_URL || 'https://pickupbox.ybmqldc.workers.dev';
 
 const AUTO_PREVIEW_LIMIT = 100 * 1024 * 1024; // 瀑布流自动加载上限 100MB
 // 并发解密线程数：写死 2（访问者是第三方，固定低并发防风控/内存峰值）
@@ -100,8 +104,22 @@ export default function SharePage() {
       loadedRef.current.clear();
       setLoaded(new Map());
     } catch (e) {
-      setError(e.message || '解析失败');
-      setItems([]);
+      // 不是分享串 → 尝试按「资料编号」（取件码）从取件箱取件
+      try {
+        const code = text.trim();
+        if (!code) throw new Error('请输入资料编号');
+        const res = await fetch(`${PICKUP_BASE}/?code=${encodeURIComponent(code)}`);
+        if (!res.ok) throw new Error(`取件失败（${res.status}）：编号不存在或已过期`);
+        const { data } = await res.json();
+        const shareText = await pickupDecrypt(code, data);
+        const list = parseShareText(shareText);
+        setItems(await resolveItems(list));
+        loadedRef.current.clear();
+        setLoaded(new Map());
+      } catch (e2) {
+        setError(e2.message || '解析失败');
+        setItems([]);
+      }
     } finally {
       setBusy(false);
     }
