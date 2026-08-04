@@ -101,8 +101,40 @@ export async function encryptFile(plain, kek) {
   return out;
 }
 
-/** 提取文件 DEK（分享用：分享只需 DEK，不泄露主密码派生密钥） */
-export async function extractDek(cipher, kek) {
+/** 用指定 DEK 加密（与 decryptFileWithDek 对称）：回传 key 等场景，wrap 部分由同一 DEK 自包裹（解密端忽略 wrap） */
+export async function encryptBytesWithDek(plain, dek) {
+  const chunkSize = DEFAULT_CHUNK_SIZE;
+  const dekKey = await crypto.subtle.importKey('raw', dek, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  const wrapIV = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+  const wrapped = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: wrapIV }, dekKey, dek));
+  const encryptedDEK = wrapped.slice(0, DEK_LENGTH);
+  const wrapTag = wrapped.slice(DEK_LENGTH);
+  const baseIV = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+
+  const n = Math.max(1, Math.ceil(plain.length / chunkSize));
+  const chunks = [];
+  for (let i = 0; i < n; i += 1) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize, plain.length);
+    const ct = new Uint8Array(
+      await crypto.subtle.encrypt({ name: 'AES-GCM', iv: chunkIV(baseIV, i) }, dekKey, plain.slice(start, end)),
+    );
+    chunks.push(ct);
+  }
+
+  const header = buildHeader({ wrapIV, encryptedDEK, wrapTag, chunkSize, baseIV });
+  const total = HEADER_SIZE + chunks.reduce((s, c) => s + c.length, 0);
+  const out = new Uint8Array(total);
+  out.set(header, 0);
+  let off = HEADER_SIZE;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}
+
+/** 提取文件 DEK（分享用：分享只需 DEK，不泄露主密码派生密钥） */export async function extractDek(cipher, kek) {
   const header = parseHeader(cipher);
   if (!header) throw new Error('bad cipher format: invalid header');
   if (header.version !== 1) throw new Error(`unsupported format version: ${header.version}`);

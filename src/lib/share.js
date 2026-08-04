@@ -3,7 +3,7 @@
  * 对方拿到分享串即可直连微软 CDN 拉密文，不依赖主站在线；注意分享串 1 小时有效（直链时效）。
  * 单文件 = 一段分享串；批量 = .key 文件（混淆 JSON）。
  */
-import { obfuscate, deobfuscate, toBase64Url, fromBase64Url } from '../../../shared/format.js';
+import { obfuscate, deobfuscate, toBase64Url, fromBase64Url } from './format.js';
 
 /** 单文件分享串编码 */
 export function encodeShareItem({ dl, dek, plainName, size }) {

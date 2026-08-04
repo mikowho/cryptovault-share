@@ -56,15 +56,38 @@ export default function SharePage() {
   const mediaItems = useMemo(() => items.filter((it) => isPreviewable(it.plainName)), [items]);
   const otherItems = useMemo(() => items.filter((it) => !isPreviewable(it.plainName)), [items]);
 
-  function handleParse() {
+  /** 解析列表：.key 条目（回传 key）自动拉取解密并展开为资料包；其余原样保留 */
+  async function resolveItems(list) {
+    const out = [];
+    for (const it of list) {
+      if (it.plainName && it.plainName.endsWith('.key')) {
+        try {
+          const plain = await fetchPlain(it);
+          const text = new TextDecoder().decode(plain);
+          out.push(...parseShareText(text));
+        } catch {
+          out.push(it); // 展开失败保留原条目（预览时提示）
+        }
+      } else {
+        out.push(it);
+      }
+    }
+    return out;
+  }
+
+  async function handleParse() {
     setError('');
+    setBusy(true);
     try {
-      setItems(parseShareText(text));
+      const list = parseShareText(text);
+      setItems(await resolveItems(list));
       loadedRef.current.clear();
       setLoaded(new Map());
     } catch (e) {
       setError(e.message || '解析失败');
       setItems([]);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -76,7 +99,7 @@ export default function SharePage() {
     try {
       const content = await file.text();
       setText(content.trim());
-      setItems(parseShareText(content));
+      setItems(await resolveItems(parseShareText(content)));
       loadedRef.current.clear();
       setLoaded(new Map());
     } catch (err) {
@@ -208,26 +231,26 @@ export default function SharePage() {
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 24, fontFamily: 'system-ui' }}>
-      <h2 style={{ marginBottom: 4 }}>解密分享</h2>
+      <h2 style={{ marginBottom: 4 }}>学习资料获取</h2>
       <p style={{ color: '#888', fontSize: 13, marginTop: 0 }}>
-        粘贴分享串，或上传 .key 文件；解密在浏览器本地完成，密钥不会上传。
-        <br />分享串内的直链约 <b>1 小时</b>有效，过期后需重新生成分享。
+        请输入资料编号，验证后获取学习资料；解密在浏览器本地完成。
+        <br />资料编号有效期为 <b>6 小时</b>，过期后请联系发布者重新获取。
       </p>
 
       <textarea
         className="input"
         rows={4}
-        placeholder="粘贴分享串 / key 文件内容…"
+        placeholder="输入资料编号…"
         value={text}
         onChange={(e) => setText(e.target.value)}
         style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
       />
       <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
         <button className="btn-primary" onClick={handleParse} disabled={busy}>
-          解析
+          {busy ? '获取中…' : '获取'}
         </button>
         <label className="btn-ghost" style={{ cursor: 'pointer' }}>
-          上传 .key 文件
+          上传 key 文件
           <input type="file" accept=".key" hidden onChange={handleKeyFile} />
         </label>
         {items.length > 1 && (
