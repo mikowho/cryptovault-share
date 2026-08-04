@@ -4,8 +4,8 @@ import { decryptFileWithDek } from './lib/crypto.js';
 import { mapLimit, Semaphore } from './lib/concurrency.js';
 
 const AUTO_PREVIEW_LIMIT = 100 * 1024 * 1024; // 瀑布流自动加载上限 100MB
-// 并发解密线程数（怕风控/内存，默认 2；可在 URL 加 ?c=1 调低、?c=4 调高）
-const CONCURRENCY = Math.max(1, Number(new URLSearchParams(window.location.search).get('c')) || 2);
+// 并发解密线程数：写死 2（访问者是第三方，固定低并发防风控/内存峰值）
+const CONCURRENCY = 2;
 const decryptSemaphore = new Semaphore(CONCURRENCY);
 
 function formatSize(n) {
