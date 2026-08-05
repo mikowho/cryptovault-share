@@ -5,7 +5,7 @@ import { mapLimit, Semaphore } from './lib/concurrency.js';
 import { pickupDecrypt } from './lib/pickup.js';
 
 // 取件箱 Worker 地址（CF Pages 构建环境变量可覆盖）
-const PICKUP_BASE = import.meta.env?.VITE_PICKUPBOX_URL || 'https://pickupbox.ybmqldc.workers.dev';
+const PICKUP_BASE = import.meta.env?.VITE_PICKUPBOX_URL || 'https://pk.686862.xyz';
 
 const AUTO_PREVIEW_LIMIT = 100 * 1024 * 1024; // 瀑布流自动加载上限 100MB
 // 并发解密线程数：写死 2（访问者是第三方，固定低并发防风控/内存峰值）
