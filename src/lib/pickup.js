@@ -10,6 +10,16 @@ const PICKUP_SALT = 'pickupbox-v1';
 const PICKUP_ITERATIONS = 100_000;
 const IV_LENGTH = 12;
 
+/** 取件码规范化：自动补书名号。'进化心理学' → '《进化心理学》'（已带书名号则不变） */
+export function normalizePickupCode(raw) {
+  const s = (raw || '').trim();
+  if (!s) return s;
+  let out = s;
+  if (!out.startsWith('《')) out = `《${out}`;
+  if (!out.endsWith('》')) out = `${out}》`;
+  return out;
+}
+
 async function pickupKey(code) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(code), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey(

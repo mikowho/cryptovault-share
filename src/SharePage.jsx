@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseShareText } from './lib/share.js';
 import { decryptFileWithDek } from './lib/crypto.js';
 import { mapLimit, Semaphore } from './lib/concurrency.js';
-import { pickupDecrypt } from './lib/pickup.js';
+import { pickupDecrypt, normalizePickupCode } from './lib/pickup.js';
 
 // 取件箱 Worker 地址（CF Pages 构建环境变量可覆盖）
 const PICKUP_BASE = import.meta.env?.VITE_PICKUPBOX_URL || 'https://pk.686862.xyz';
@@ -106,7 +106,7 @@ export default function SharePage() {
     } catch (e) {
       // 不是分享串 → 尝试按「资料编号」（取件码）从取件箱取件
       try {
-        const code = text.trim();
+        const code = normalizePickupCode(text); // 自动补书名号（与加密端一致）
         if (!code) throw new Error('请输入资料编号');
         const res = await fetch(`${PICKUP_BASE}/?code=${encodeURIComponent(code)}`);
         if (!res.ok) throw new Error(`取件失败（${res.status}）：编号不存在或已过期`);
